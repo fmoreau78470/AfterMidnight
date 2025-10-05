@@ -1,0 +1,13 @@
+# Environnement virtuel
+venv/
+
+# Base de données locale
+db/
+
+# Fichiers de configuration locaux
+.config/
+.aftermidnight/
+
+# Fichiers Python compilés
+__pycache__/
+*.py[cod]
