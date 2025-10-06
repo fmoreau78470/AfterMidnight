@@ -8,13 +8,12 @@ def update_db():
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
 
-        # Ajouter la colonne parent_id à la table projects si elle n'existe pas
+        # Ajouter la colonne is_organization à la table projects si elle n'existe pas
         cursor.execute("PRAGMA table_info(projects)")
         columns = [column[1] for column in cursor.fetchall()]
 
-        if "parent_id" not in columns:
-            cursor.execute("ALTER TABLE projects ADD COLUMN parent_id INTEGER")
-            cursor.execute("UPDATE projects SET parent_id = NULL WHERE parent_id IS NULL")
+        if "is_organization" not in columns:
+            cursor.execute("ALTER TABLE projects ADD COLUMN is_organization INTEGER DEFAULT 0")
 
         conn.commit()
     print(f"Base de données mise à jour : {DB_PATH}")

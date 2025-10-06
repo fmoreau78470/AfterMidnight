@@ -2,7 +2,7 @@
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QTreeWidget, QTreeWidgetItem, QListWidget, QListWidgetItem,
-    QLineEdit, QMessageBox, QFileDialog, QInputDialog, QTreeWidgetItemIterator
+    QLineEdit, QMessageBox, QFileDialog, QInputDialog, QTreeWidgetItemIterator, QDialog, QDialogButtonBox, QCheckBox
 )
 from PyQt6.QtCore import Qt
 import sqlite3
@@ -17,6 +17,18 @@ from src.ui.metadata_config_window import MetadataConfigWindow
 
 CONFIG_DIR = Path.home() / ".aftermidnight"
 CONFIG_FILE = CONFIG_DIR / "config.json"
+
+class CustomTreeWidget(QTreeWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.parent_window = parent
+        self.setSelectionMode(QTreeWidget.SelectionMode.SingleSelection)
+        self.setDragDropMode(QTreeWidget.DragDropMode.InternalMove)
+
+    def dropEvent(self, event):
+        super().dropEvent(event)
+        if self.parent_window:
+            self.parent_window.tree_drop_event(event)
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -33,9 +45,20 @@ class MainWindow(QMainWindow):
 
         # Initialiser l'UI
         self.init_ui()
-        self.setup_tree_widget()
         self.load_projects()
         self.load_last_project()
+
+    def format_duration(self, seconds):
+        """Convertir les secondes en format hh:mm:ss."""
+        if seconds is None:
+            return "inconnu"
+
+        hours = int(seconds // 3600)
+        remaining_seconds = seconds % 3600
+        minutes = int(remaining_seconds // 60)
+        seconds = int(remaining_seconds % 60)
+
+        return f"{hours}h {minutes}m {seconds}s"
 
     def save_expanded_state(self):
         """Sauvegarder l'état déplié des projets."""
@@ -57,81 +80,15 @@ class MainWindow(QMainWindow):
                     item.setExpanded(True)
                 iterator += 1
 
-    def setup_tree_widget(self):
-        """Configurer le QTreeWidget pour gérer le glisser-déposer."""
-        self.project_tree.dropEvent = lambda event: self.tree_drop_event(event)
-
-    def tree_drop_event(self, event):
-        """Gérer l'événement de glisser-déposer pour mettre à jour la base de données."""
-        # Sauvegarder l'état déplié des projets
-        self.save_expanded_state()
-
-        # Appeler la méthode par défaut pour gérer le déplacement visuel
-        super(QTreeWidget, self.project_tree).dropEvent(event)
-
-        # Récupérer l'item déplacé
-        item = self.project_tree.currentItem()
-        if item is None:
-            return
-
-        project_id = item.data(0, Qt.ItemDataRole.UserRole)
-        parent_item = item.parent()
-
-        # Si l'item est déplacé à la racine
-        if parent_item is None:
-            new_parent_id = None
-        else:
-            new_parent_id = parent_item.data(0, Qt.ItemDataRole.UserRole)
-
-        # Vérifier que le projet n'est pas déplacé dans un de ses sous-projets
-        if self.is_child_of(project_id, new_parent_id):
-            QMessageBox.warning(self, "Erreur", "Un projet ne peut pas être déplacé dans un de ses sous-projets.")
-            self.load_projects()  # Recharger l'arborescence pour annuler le déplacement
-            return
-
-        # Mettre à jour la base de données pour le projet et ses sous-projets
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-
-                # Mettre à jour le parent_id du projet déplacé
-                cursor.execute("UPDATE projects SET parent_id = ? WHERE id = ?", (new_parent_id, project_id))
-
-                # Mettre à jour le parent_id de tous les sous-projets récursivement
-                self.update_children_parent_id(cursor, project_id, new_parent_id)
-
-                conn.commit()
-                self.load_projects()
-                # Rétablir l'état déplié des projets
-                self.restore_expanded_state()
-        except Exception as e:
-            QMessageBox.critical(self, "Erreur", f"Une erreur est survenue : {e}")
-            self.load_projects()  # Recharger l'arborescence en cas d'erreur
-
-    def update_children_parent_id(self, cursor, old_parent_id, new_parent_id):
-        """Mettre à jour le parent_id des sous-projets récursivement."""
-        # Trouver tous les sous-projets directs
-        cursor.execute("SELECT id FROM projects WHERE parent_id = ?", (old_parent_id,))
-        children = cursor.fetchall()
-
-        # Mettre à jour le parent_id des sous-projets directs
-        for child_id, in children:
-            cursor.execute("UPDATE projects SET parent_id = ? WHERE id = ?", (new_parent_id, child_id[0]))
-
-            # Mettre à jour récursivement les sous-projets des sous-projets
-            self.update_children_parent_id(cursor, child_id[0], new_parent_id)
-
-    def format_duration(self, seconds):
-        """Convertir les secondes en format hh:mm:ss."""
-        if seconds is None:
-            return "inconnu"
-
-        hours = int(seconds // 3600)
-        remaining_seconds = seconds % 3600
-        minutes = int(remaining_seconds // 60)
-        seconds = int(remaining_seconds % 60)
-
-        return f"{hours}h {minutes}m {seconds}s"
+    def expand_project(self, project_id):
+        """Déplier un projet spécifique dans l'arborescence."""
+        iterator = QTreeWidgetItemIterator(self.project_tree)
+        while iterator.value():
+            item = iterator.value()
+            if item.data(0, Qt.ItemDataRole.UserRole) == project_id:
+                item.setExpanded(True)
+                break
+            iterator += 1
 
     def init_ui(self):
         # Layout principal
@@ -143,14 +100,9 @@ class MainWindow(QMainWindow):
         project_layout = QVBoxLayout()
 
         self.project_label = QLabel("Projets :")
-        self.project_tree = QTreeWidget()
+        self.project_tree = CustomTreeWidget(self)
         self.project_tree.setHeaderLabel("Arborescence des Projets")
         self.project_tree.itemSelectionChanged.connect(self.on_project_selected)
-
-        # Activer le glisser-déposer
-        self.project_tree.setDragDropMode(QTreeWidget.DragDropMode.InternalMove)
-        self.project_tree.setDragEnabled(True)
-        self.project_tree.setDropIndicatorShown(True)
 
         self.new_project_button = QPushButton("Nouveau Projet")
         self.new_project_button.clicked.connect(self.create_project)
@@ -238,22 +190,26 @@ class MainWindow(QMainWindow):
 
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT id, name, parent_id FROM projects")
+            cursor.execute("SELECT id, name, parent_id, is_organization FROM projects")
             projects = cursor.fetchall()
 
         # Créer un dictionnaire pour stocker les projets par parent_id
         projects_dict = {}
-        for project_id, name, parent_id in projects:
+        for project_id, name, parent_id, is_organization in projects:
             if parent_id not in projects_dict:
                 projects_dict[parent_id] = []
-            projects_dict[parent_id].append((project_id, name))
+            projects_dict[parent_id].append((project_id, name, is_organization))
 
         # Fonction récursive pour ajouter les projets à l'arborescence
         def add_projects_to_tree(parent_item, parent_id):
             if parent_id in projects_dict:
-                for project_id, name in projects_dict[parent_id]:
+                for project_id, name, is_organization in projects_dict[parent_id]:
                     item = QTreeWidgetItem(parent_item, [name])
                     item.setData(0, Qt.ItemDataRole.UserRole, project_id)
+                    if is_organization:
+                        font = item.font(0)
+                        font.setItalic(True)
+                        item.setFont(0, font)
                     add_projects_to_tree(item, project_id)
 
         # Ajouter les projets de niveau racine (parent_id = NULL)
@@ -270,9 +226,34 @@ class MainWindow(QMainWindow):
         # Sauvegarder l'état déplié des projets
         self.save_expanded_state()
 
-        project_name, ok = QInputDialog.getText(self, "Nouveau Projet", "Nom du projet :")
-        if not ok or not project_name:
+        # Créer une boîte de dialogue pour le nom du projet et le type de projet
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Nouveau Projet")
+        dialog_layout = QVBoxLayout()
+
+        name_label = QLabel("Nom du projet :")
+        name_edit = QLineEdit()
+        dialog_layout.addWidget(name_label)
+        dialog_layout.addWidget(name_edit)
+
+        org_check = QCheckBox("Projet d'organisation")
+        dialog_layout.addWidget(org_check)
+
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        dialog_layout.addWidget(button_box)
+
+        dialog.setLayout(dialog_layout)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
+
+        project_name = name_edit.text()
+        if not project_name:
+            return
+
+        is_organization = org_check.isChecked()
 
         # Demander si l'utilisateur veut créer un sous-projet
         selected_items = self.project_tree.selectedItems()
@@ -292,10 +273,15 @@ class MainWindow(QMainWindow):
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                INSERT INTO projects (name, parent_id) VALUES (?, ?)
-                """, (project_name, parent_id))
+                INSERT INTO projects (name, parent_id, is_organization) VALUES (?, ?, ?)
+                """, (project_name, parent_id, is_organization))
                 conn.commit()
                 self.load_projects()
+
+                # Déplier le projet parent si un sous-projet a été créé
+                if parent_id is not None:
+                    self.expand_project(parent_id)
+
                 # Rétablir l'état déplié des projets
                 self.restore_expanded_state()
         except sqlite3.IntegrityError:
@@ -347,6 +333,9 @@ class MainWindow(QMainWindow):
 
     def is_child_of(self, project_id, potential_parent_id):
         """Vérifier si un projet est un ancêtre d'un autre projet."""
+        if potential_parent_id is None:
+            return False
+
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -354,11 +343,73 @@ class MainWindow(QMainWindow):
                 SELECT id, parent_id FROM projects WHERE id = ?
                 UNION ALL
                 SELECT p.id, p.parent_id FROM projects p
-                INNER JOIN project_tree pt ON p.parent_id = pt.id
+                INNER JOIN project_tree pt ON p.id = pt.parent_id
             )
             SELECT id FROM project_tree WHERE id = ?
-            """, (potential_parent_id, project_id))
+            """, (project_id, potential_parent_id))
             return cursor.fetchone() is not None
+
+    def tree_drop_event(self, event):
+        """Gérer l'événement de glisser-déposer pour mettre à jour la base de données."""
+        # Sauvegarder l'état déplié des projets
+        self.save_expanded_state()
+
+        # Récupérer l'item déplacé
+        item = self.project_tree.currentItem()
+        if item is None:
+            return
+
+        # Récupérer l'item cible (celui sur lequel on a lâché l'item déplacé)
+        drop_item = self.project_tree.itemAt(event.position().toPoint())
+        if drop_item is None or drop_item == item:
+            return
+
+        project_id = item.data(0, Qt.ItemDataRole.UserRole)
+        new_parent_id = drop_item.data(0, Qt.ItemDataRole.UserRole)
+
+        # Vérifier que le projet n'est pas déplacé dans un de ses sous-projets
+        if self.is_child_of(project_id, new_parent_id):
+            QMessageBox.warning(self, "Erreur", "Un projet ne peut pas être déplacé dans un de ses sous-projets.")
+            self.load_projects()  # Recharger l'arborescence pour annuler le déplacement
+            return
+
+        # Mettre à jour la base de données pour le projet et ses sous-projets
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+
+                # Mettre à jour le parent_id du projet déplacé
+                cursor.execute("UPDATE projects SET parent_id = ? WHERE id = ?", (new_parent_id, project_id))
+
+                # Mettre à jour le parent_id de tous les sous-projets récursivement
+                self.update_children_parent_id(cursor, project_id, new_parent_id)
+
+                conn.commit()
+                self.load_projects()
+
+                # Déplier le projet parent si un projet a été déplacé
+                self.expand_project(new_parent_id)
+
+                # Rétablir l'état déplié des projets
+                self.restore_expanded_state()
+        except Exception as e:
+            logging.error(f"Erreur lors du déplacement du projet: {e}")
+            QMessageBox.critical(self, "Erreur", f"Une erreur est survenue : {e}")
+            self.load_projects()  # Recharger l'arborescence en cas d'erreur
+
+    def update_children_parent_id(self, cursor, old_parent_id, new_parent_id):
+        """Mettre à jour le parent_id des sous-projets récursivement."""
+        # Trouver tous les sous-projets directs
+        cursor.execute("SELECT id FROM projects WHERE parent_id = ?", (old_parent_id,))
+        children = cursor.fetchall()
+
+        # Mettre à jour le parent_id des sous-projets directs
+        for child in children:
+            child_id = child[0]  # Accéder au premier élément du tuple
+            cursor.execute("UPDATE projects SET parent_id = ? WHERE id = ?", (new_parent_id, child_id))
+
+            # Mettre à jour récursivement les sous-projets des sous-projets
+            self.update_children_parent_id(cursor, child_id, new_parent_id)
 
     def load_project_images(self):
         """Charger et afficher la synthèse des prises de vue classées par soirée."""
@@ -366,6 +417,18 @@ class MainWindow(QMainWindow):
         if selected_items:
             selected_item = selected_items[0]
             self.current_project_id = selected_item.data(0, Qt.ItemDataRole.UserRole)
+
+            # Vérifier si le projet est un projet d'organisation
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT is_organization FROM projects WHERE id = ?", (self.current_project_id,))
+                is_organization = cursor.fetchone()[0]
+
+            if is_organization:
+                self.session_list.clear()
+                self.session_list.addItem("Ce projet est un projet d'organisation et ne contient pas d'images.")
+                return
+
             self.save_last_project(self.current_project_id)
 
             with sqlite3.connect(self.db_path) as conn:
@@ -440,6 +503,16 @@ class MainWindow(QMainWindow):
         """Importer des fichiers FITS depuis une arborescence de répertoires."""
         if self.current_project_id is None:
             QMessageBox.warning(self, "Erreur", "Veuillez sélectionner un projet.")
+            return
+
+        # Vérifier si le projet est un projet d'organisation
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT is_organization FROM projects WHERE id = ?", (self.current_project_id,))
+            is_organization = cursor.fetchone()[0]
+
+        if is_organization:
+            QMessageBox.warning(self, "Erreur", "Vous ne pouvez pas importer des images dans un projet d'organisation.")
             return
 
         # Ouvrir une boîte de dialogue pour sélectionner un répertoire
