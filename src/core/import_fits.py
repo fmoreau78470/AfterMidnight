@@ -70,6 +70,10 @@ def import_fits(self):
     if dir_path:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
+
+            # Vérifier que les colonnes nécessaires existent dans la table images
+            self.ensure_columns_exist(cursor)
+
             # Parcourir récursivement le répertoire
             for root, dirs, files in os.walk(dir_path):
                 for file in files:
@@ -85,19 +89,22 @@ def import_fits(self):
                         SELECT 1 FROM images WHERE filename = ? AND project_id = ?
                         """, (filename, self.current_project_id))
                         if cursor.fetchone() is None:
-                            cursor.execute("""
-                            INSERT INTO images (filename, path, project_id, ra, dec, date_obs, exposure, filter)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                            """, (
-                                filename,
-                                file_path,
-                                self.current_project_id,
-                                metadata["ra"],
-                                metadata["dec"],
-                                metadata["date_obs"],
-                                metadata["exposure"],
-                                metadata["filter"]
-                            ))
+                            # Construire la requête d'insertion dynamiquement
+                            columns = ["filename", "path", "project_id"]
+                            values = [filename, file_path, self.current_project_id]
+
+                            for db_name, value in metadata.items():
+                                columns.append(db_name)
+                                values.append(value)
+
+                            # Entourer les noms de colonnes de guillemets s'ils contiennent des espaces ou caractères spéciaux
+                            columns_quoted = ['"' + col + '"' if ' ' in col or not col.isalnum() else col for col in columns]
+                            placeholders = ', '.join(['?'] * len(values))
+                            columns_str = ', '.join(columns_quoted)
+
+                            query = f"INSERT INTO images ({columns_str}) VALUES ({placeholders})"
+                            cursor.execute(query, values)
+
                             logging.info(f"Fichier importé : {file_path}")
             conn.commit()
             self.load_project_images()
