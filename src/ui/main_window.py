@@ -1,4 +1,11 @@
 # src/ui/main_window.py
+"""
+Module principal de l'application After Midnight.
+
+Ce module contient la classe MainWindow qui gère l'interface utilisateur principale
+et les interactions avec la base de données pour la gestion des projets et des images.
+"""
+
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QTreeWidget, QTreeWidgetItem, QListWidget, QListWidgetItem,
@@ -19,19 +26,61 @@ CONFIG_DIR = Path.home() / ".aftermidnight"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
 class CustomTreeWidget(QTreeWidget):
+    """
+    Sous-classe de QTreeWidget pour gérer le glisser-déposer des projets.
+
+    Cette classe étend QTreeWidget pour permettre le déplacement des projets
+    par glisser-déposer et pour gérer les événements associés.
+
+    Attributes:
+        parent_window (MainWindow): Référence à la fenêtre principale pour accéder aux méthodes de gestion des projets.
+    """
+
     def __init__(self, parent=None):
+        """
+        Initialise une nouvelle instance de CustomTreeWidget.
+
+        Args:
+            parent (QWidget, optional): Le widget parent. Par défaut, None.
+        """
         super().__init__(parent)
         self.parent_window = parent
         self.setSelectionMode(QTreeWidget.SelectionMode.SingleSelection)
         self.setDragDropMode(QTreeWidget.DragDropMode.InternalMove)
 
     def dropEvent(self, event):
+        """
+        Gère l'événement de glisser-déposer.
+
+        Cette méthode est appelée lorsqu'un élément est lâché sur le widget.
+        Elle appelle la méthode tree_drop_event de la fenêtre principale pour
+        mettre à jour la base de données.
+
+        Args:
+            event (QDropEvent): L'événement de glisser-déposer.
+        """
         super().dropEvent(event)
         if self.parent_window:
             self.parent_window.tree_drop_event(event)
 
 class MainWindow(QMainWindow):
+    """
+    Classe principale de l'application After Midnight.
+
+    Cette classe gère l'interface utilisateur principale et les interactions
+    avec la base de données pour la gestion des projets et des images.
+
+    Attributes:
+        db_path (Path): Chemin vers la base de données SQLite.
+        current_project_id (int): Identifiant du projet actuellement sélectionné.
+    """
+
     def __init__(self):
+        """
+        Initialise une nouvelle instance de MainWindow.
+
+        Configure la fenêtre principale, charge les projets et les paramètres.
+        """
         super().__init__()
         self.setWindowTitle("After Midnight")
         self.setGeometry(100, 100, 800, 600)
@@ -49,7 +98,15 @@ class MainWindow(QMainWindow):
         self.load_last_project()
 
     def format_duration(self, seconds):
-        """Convertir les secondes en format hh:mm:ss."""
+        """
+        Convertit les secondes en format hh:mm:ss.
+
+        Args:
+            seconds (float): Durée en secondes à convertir.
+
+        Returns:
+            str: Durée formatée en heures, minutes et secondes.
+        """
         if seconds is None:
             return "inconnu"
 
@@ -61,7 +118,12 @@ class MainWindow(QMainWindow):
         return f"{hours}h {minutes}m {seconds}s"
 
     def save_expanded_state(self):
-        """Sauvegarder l'état déplié des projets."""
+        """
+        Sauvegarde l'état déplié des projets.
+
+        Parcourt tous les projets dans l'arborescence et sauvegarde les identifiants
+        des projets qui sont dépliés.
+        """
         self.expanded_items = []
         iterator = QTreeWidgetItemIterator(self.project_tree)
         while iterator.value():
@@ -71,7 +133,12 @@ class MainWindow(QMainWindow):
             iterator += 1
 
     def restore_expanded_state(self):
-        """Rétablir l'état déplié des projets."""
+        """
+        Rétablit l'état déplié des projets.
+
+        Parcourt tous les projets dans l'arborescence et déploie ceux qui étaient
+        dépliés avant une opération de mise à jour.
+        """
         if hasattr(self, 'expanded_items'):
             iterator = QTreeWidgetItemIterator(self.project_tree)
             while iterator.value():
@@ -81,7 +148,12 @@ class MainWindow(QMainWindow):
                 iterator += 1
 
     def expand_project(self, project_id):
-        """Déplier un projet spécifique dans l'arborescence."""
+        """
+        Déploie un projet spécifique dans l'arborescence.
+
+        Args:
+            project_id (int): Identifiant du projet à déplier.
+        """
         iterator = QTreeWidgetItemIterator(self.project_tree)
         while iterator.value():
             item = iterator.value()
@@ -91,6 +163,11 @@ class MainWindow(QMainWindow):
             iterator += 1
 
     def init_ui(self):
+        """
+        Initialise l'interface utilisateur.
+
+        Configure les layouts, les widgets et les connexions des signaux.
+        """
         # Layout principal
         main_widget = QWidget()
         main_layout = QHBoxLayout()
@@ -147,20 +224,33 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(main_widget)
 
     def on_project_selected(self):
-        """Activer ou désactiver le bouton d'importation en fonction de la sélection d'un projet."""
+        """
+        Active ou désactive le bouton d'importation en fonction de la sélection d'un projet.
+
+        Si un projet est sélectionné, charge les images associées à ce projet.
+        """
         selected_items = self.project_tree.selectedItems()
         self.import_button.setEnabled(len(selected_items) > 0)
         if selected_items:
             self.load_project_images()
 
     def save_last_project(self, project_id):
-        """Sauvegarder le dernier projet utilisé."""
+        """
+        Sauvegarde le dernier projet utilisé.
+
+        Args:
+            project_id (int): Identifiant du projet à sauvegarder.
+        """
         CONFIG_DIR.mkdir(exist_ok=True)
         with open(CONFIG_FILE, 'w') as f:
             json.dump({"last_project_id": project_id}, f)
 
     def load_last_project(self):
-        """Charger le dernier projet utilisé."""
+        """
+        Charge le dernier projet utilisé.
+
+        Si un projet a été utilisé précédemment, il est sélectionné automatiquement.
+        """
         if CONFIG_FILE.exists():
             with open(CONFIG_FILE, 'r') as f:
                 config = json.load(f)
@@ -170,7 +260,16 @@ class MainWindow(QMainWindow):
                     self.select_project_by_id(self.project_tree.invisibleRootItem(), last_project_id)
 
     def select_project_by_id(self, parent_item, project_id):
-        """Sélectionner un projet dans l'arborescence par son ID."""
+        """
+        Sélectionne un projet dans l'arborescence par son identifiant.
+
+        Args:
+            parent_item (QTreeWidgetItem): Item parent à partir duquel commencer la recherche.
+            project_id (int): Identifiant du projet à sélectionner.
+
+        Returns:
+            bool: True si le projet a été trouvé et sélectionné, False sinon.
+        """
         for i in range(parent_item.childCount()):
             item = parent_item.child(i)
             if item.data(0, Qt.ItemDataRole.UserRole) == project_id:
@@ -182,7 +281,12 @@ class MainWindow(QMainWindow):
         return False
 
     def load_projects(self):
-        """Charger la liste des projets depuis la base de données sous forme d'arborescence."""
+        """
+        Charge la liste des projets depuis la base de données sous forme d'arborescence.
+
+        Récupère tous les projets de la base de données et les organise dans une arborescence
+        en fonction de leur parent_id. Les projets d'organisation sont affichés en italique.
+        """
         # Sauvegarder l'état déplié des projets
         self.save_expanded_state()
 
@@ -222,7 +326,12 @@ class MainWindow(QMainWindow):
         self.import_button.setEnabled(False)
 
     def create_project(self):
-        """Créer un nouveau projet, éventuellement comme sous-projet d'un projet existant."""
+        """
+        Crée un nouveau projet, éventuellement comme sous-projet d'un projet existant.
+
+        Affiche une boîte de dialogue pour saisir le nom du projet et choisir s'il s'agit
+        d'un projet d'organisation. Demande également si le projet doit être un sous-projet.
+        """
         # Sauvegarder l'état déplié des projets
         self.save_expanded_state()
 
@@ -290,7 +399,12 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Erreur", f"Une erreur est survenue : {e}")
 
     def delete_project(self):
-        """Supprimer le projet sélectionné."""
+        """
+        Supprime le projet sélectionné.
+
+        Vérifie si le projet a des sous-projets avant de le supprimer.
+        Affiche une boîte de dialogue de confirmation avant la suppression.
+        """
         selected_items = self.project_tree.selectedItems()
         if not selected_items:
             QMessageBox.warning(self, "Erreur", "Veuillez sélectionner un projet à supprimer.")
@@ -332,7 +446,19 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Erreur", f"Une erreur est survenue : {e}")
 
     def is_child_of(self, project_id, potential_parent_id):
-        """Vérifier si un projet est un ancêtre d'un autre projet."""
+        """
+        Vérifie si un projet est un ancêtre d'un autre projet.
+
+        Utilise une requête SQL récursive pour vérifier si potential_parent_id est un
+        sous-projet de project_id, ce qui créerait une boucle dans l'arborescence.
+
+        Args:
+            project_id (int): Identifiant du projet à vérifier.
+            potential_parent_id (int): Identifiant du projet potentiellement parent.
+
+        Returns:
+            bool: True si potential_parent_id est un sous-projet de project_id, False sinon.
+        """
         if potential_parent_id is None:
             return False
 
@@ -350,7 +476,15 @@ class MainWindow(QMainWindow):
             return cursor.fetchone() is not None
 
     def tree_drop_event(self, event):
-        """Gérer l'événement de glisser-déposer pour mettre à jour la base de données."""
+        """
+        Gère l'événement de glisser-déposer pour mettre à jour la base de données.
+
+        Cette méthode est appelée lorsqu'un projet est déplacé par glisser-déposer.
+        Elle met à jour la base de données pour refléter le nouvel emplacement du projet.
+
+        Args:
+            event (QDropEvent): L'événement de glisser-déposer.
+        """
         # Sauvegarder l'état déplié des projets
         self.save_expanded_state()
 
@@ -398,21 +532,36 @@ class MainWindow(QMainWindow):
             self.load_projects()  # Recharger l'arborescence en cas d'erreur
 
     def update_children_parent_id(self, cursor, old_parent_id, new_parent_id):
-        """Mettre à jour le parent_id des sous-projets récursivement."""
+        """
+        Met à jour le parent_id des sous-projets de manière récursive.
+
+        Cette méthode est utilisée pour déplacer tous les sous-projets d'un projet
+        lorsque ce projet est déplacé dans l'arborescence.
+
+        Args:
+            cursor: Le curseur de la base de données pour exécuter les requêtes SQL.
+            old_parent_id (int): L'identifiant du projet parent actuel.
+            new_parent_id (int): L'identifiant du nouveau projet parent.
+        """
         # Trouver tous les sous-projets directs
         cursor.execute("SELECT id FROM projects WHERE parent_id = ?", (old_parent_id,))
         children = cursor.fetchall()
 
         # Mettre à jour le parent_id des sous-projets directs
         for child in children:
-            child_id = child[0]  # Accéder au premier élément du tuple
+            child_id = child[0]  # Accéder au premier élément du tuple (l'identifiant du projet)
             cursor.execute("UPDATE projects SET parent_id = ? WHERE id = ?", (new_parent_id, child_id))
 
             # Mettre à jour récursivement les sous-projets des sous-projets
             self.update_children_parent_id(cursor, child_id, new_parent_id)
 
     def load_project_images(self):
-        """Charger et afficher la synthèse des prises de vue classées par soirée."""
+        """
+        Charge et affiche la synthèse des prises de vue classées par soirée.
+
+        Si le projet sélectionné est un projet d'organisation, affiche un message
+        indiquant qu'il ne contient pas d'images. Sinon, affiche les images associées.
+        """
         selected_items = self.project_tree.selectedItems()
         if selected_items:
             selected_item = selected_items[0]
@@ -494,13 +643,22 @@ class MainWindow(QMainWindow):
                         self.session_list.addItem(f"{filter_} : durée d'exposition inconnue")
 
     def open_metadata_config(self):
-        """Ouvrir la fenêtre de configuration des métadonnées."""
+        """
+        Ouvre la fenêtre de configuration des métadonnées.
+
+        Affiche une fenêtre modale pour configurer les mots-clés FITS à extraire.
+        """
         config_window = MetadataConfigWindow(self, self.db_path)
         if config_window.exec():
             QMessageBox.information(self, "Succès", "Configuration des métadonnées sauvegardée.")
 
     def import_fits(self):
-        """Importer des fichiers FITS depuis une arborescence de répertoires."""
+        """
+        Importe des fichiers FITS depuis une arborescence de répertoires.
+
+        Vérifie que le projet sélectionné n'est pas un projet d'organisation.
+        Parcourt récursivement le répertoire sélectionné et importe les fichiers FITS.
+        """
         if self.current_project_id is None:
             QMessageBox.warning(self, "Erreur", "Veuillez sélectionner un projet.")
             return
@@ -561,7 +719,12 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Succès", f"Importation terminée. {cursor.rowcount} nouveaux fichiers ajoutés.")
 
     def ensure_columns_exist(self, cursor):
-        """Vérifier et ajouter les colonnes manquantes dans la table images."""
+        """
+        Vérifie et ajoute les colonnes manquantes dans la table images.
+
+        Args:
+            cursor: Le curseur de la base de données pour exécuter les requêtes SQL.
+        """
         cursor.execute("PRAGMA table_info(images)")
         existing_columns = {column[1].lower() for column in cursor.fetchall()}
 
@@ -579,7 +742,15 @@ class MainWindow(QMainWindow):
                     logging.warning(f"Erreur lors de l'ajout de la colonne {column}: {e}")
 
     def extract_fits_metadata(self, fits_file):
-        """Extraire les métadonnées d'un fichier FITS en utilisant la configuration personnalisée."""
+        """
+        Extrait les métadonnées d'un fichier FITS en utilisant la configuration personnalisée.
+
+        Args:
+            fits_file (str): Chemin vers le fichier FITS à analyser.
+
+        Returns:
+            dict: Dictionnaire contenant les métadonnées extraites.
+        """
         metadata = {}
 
         with sqlite3.connect(self.db_path) as conn:
@@ -616,7 +787,12 @@ class MainWindow(QMainWindow):
         return metadata
 
     def clear_database(self):
-        """Vider la base de données avec une double validation, en conservant les métadonnées protégées."""
+        """
+        Vide la base de données avec une double validation, en conservant les métadonnées protégées.
+
+        Affiche deux boîtes de dialogue de confirmation avant de vider la base de données.
+        Conserve les métadonnées protégées (date_obs, exposure, ra, dec, filter).
+        """
         # Première confirmation
         confirm1 = QMessageBox.question(
             self,
