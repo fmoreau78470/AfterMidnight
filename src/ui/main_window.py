@@ -9,9 +9,10 @@ et les interactions avec la base de données pour la gestion des projets et des 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QTreeWidget, QTreeWidgetItem, QListWidget, QListWidgetItem,
-    QLineEdit, QMessageBox, QFileDialog, QInputDialog, QTreeWidgetItemIterator, QDialog, QDialogButtonBox, QCheckBox
+    QLineEdit, QMessageBox, QFileDialog, QInputDialog, QTreeWidgetItemIterator, QDialog, QDialogButtonBox, QCheckBox, QStyle
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QEvent
+from PyQt6.QtGui import QIcon, QBrush, QColor, QCursor
 import sqlite3
 import os
 import logging
@@ -25,61 +26,14 @@ from src.ui.metadata_config_window import MetadataConfigWindow
 CONFIG_DIR = Path.home() / ".aftermidnight"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
-class CustomTreeWidget(QTreeWidget):
-    """
-    Sous-classe de QTreeWidget pour gérer le glisser-déposer des projets.
-
-    Cette classe étend QTreeWidget pour permettre le déplacement des projets
-    par glisser-déposer et pour gérer les événements associés.
-
-    Attributes:
-        parent_window (MainWindow): Référence à la fenêtre principale pour accéder aux méthodes de gestion des projets.
-    """
-
-    def __init__(self, parent=None):
-        """
-        Initialise une nouvelle instance de CustomTreeWidget.
-
-        Args:
-            parent (QWidget, optional): Le widget parent. Par défaut, None.
-        """
-        super().__init__(parent)
-        self.parent_window = parent
-        self.setSelectionMode(QTreeWidget.SelectionMode.SingleSelection)
-        self.setDragDropMode(QTreeWidget.DragDropMode.InternalMove)
-
-    def dropEvent(self, event):
-        """
-        Gère l'événement de glisser-déposer.
-
-        Cette méthode est appelée lorsqu'un élément est lâché sur le widget.
-        Elle appelle la méthode tree_drop_event de la fenêtre principale pour
-        mettre à jour la base de données.
-
-        Args:
-            event (QDropEvent): L'événement de glisser-déposer.
-        """
-        super().dropEvent(event)
-        if self.parent_window:
-            self.parent_window.tree_drop_event(event)
-
 class MainWindow(QMainWindow):
     """
     Classe principale de l'application After Midnight.
-
-    Cette classe gère l'interface utilisateur principale et les interactions
-    avec la base de données pour la gestion des projets et des images.
-
-    Attributes:
-        db_path (Path): Chemin vers la base de données SQLite.
-        current_project_id (int): Identifiant du projet actuellement sélectionné.
     """
 
     def __init__(self):
         """
         Initialise une nouvelle instance de MainWindow.
-
-        Configure la fenêtre principale, charge les projets et les paramètres.
         """
         super().__init__()
         self.setWindowTitle("After Midnight")
@@ -120,9 +74,6 @@ class MainWindow(QMainWindow):
     def save_expanded_state(self):
         """
         Sauvegarde l'état déplié des projets.
-
-        Parcourt tous les projets dans l'arborescence et sauvegarde les identifiants
-        des projets qui sont dépliés.
         """
         self.expanded_items = []
         iterator = QTreeWidgetItemIterator(self.project_tree)
@@ -135,9 +86,6 @@ class MainWindow(QMainWindow):
     def restore_expanded_state(self):
         """
         Rétablit l'état déplié des projets.
-
-        Parcourt tous les projets dans l'arborescence et déploie ceux qui étaient
-        dépliés avant une opération de mise à jour.
         """
         if hasattr(self, 'expanded_items'):
             iterator = QTreeWidgetItemIterator(self.project_tree)
@@ -165,8 +113,6 @@ class MainWindow(QMainWindow):
     def init_ui(self):
         """
         Initialise l'interface utilisateur.
-
-        Configure les layouts, les widgets et les connexions des signaux.
         """
         # Layout principal
         main_widget = QWidget()
@@ -177,9 +123,13 @@ class MainWindow(QMainWindow):
         project_layout = QVBoxLayout()
 
         self.project_label = QLabel("Projets :")
-        self.project_tree = CustomTreeWidget(self)
+        self.project_tree = QTreeWidget()
         self.project_tree.setHeaderLabel("Arborescence des Projets")
         self.project_tree.itemSelectionChanged.connect(self.on_project_selected)
+
+        # Activer le support du glisser-déposer pour les dossiers externes
+        self.project_tree.setAcceptDrops(True)
+        self.project_tree.installEventFilter(self)
 
         self.new_project_button = QPushButton("Nouveau Projet")
         self.new_project_button.clicked.connect(self.create_project)
@@ -208,13 +158,16 @@ class MainWindow(QMainWindow):
         self.session_label = QLabel("Synthèse des prises de vue :")
         self.session_list = QListWidget()
 
-        self.import_button = QPushButton("Importer des FITS")
-        self.import_button.clicked.connect(self.import_fits)
-        self.import_button.setEnabled(False)  # Désactiver le bouton par défaut
+        # Bouton avec icône "Dossier" pour ouvrir le gestionnaire de fichiers
+        self.open_folder_button = QPushButton()
+        self.open_folder_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon))
+        self.open_folder_button.setToolTip("Ouvrir un dossier de fichiers FITS")
+        self.open_folder_button.clicked.connect(self.open_folder_dialog)
+        self.open_folder_button.setEnabled(False)  # Désactiver le bouton par défaut
 
         session_layout.addWidget(self.session_label)
         session_layout.addWidget(self.session_list)
-        session_layout.addWidget(self.import_button)
+        session_layout.addWidget(self.open_folder_button)
         self.session_panel.setLayout(session_layout)
 
         # Ajouter les panneaux au layout principal
@@ -223,14 +176,252 @@ class MainWindow(QMainWindow):
         main_widget.setLayout(main_layout)
         self.setCentralWidget(main_widget)
 
+    def eventFilter(self, obj, event):
+        """
+        Filtre les événements pour gérer le glisser-déposer de dossiers externes.
+        """
+        if obj == self.project_tree:
+            if event.type() == QEvent.Type.DragEnter:
+                if event.mimeData().hasUrls():
+                    event.acceptProposedAction()
+                    return True
+            elif event.type() == QEvent.Type.DragMove:
+                self.dragMoveEvent(event)
+                return True
+            elif event.type() == QEvent.Type.Drop:
+                self.dropEvent(event)
+                return True
+        return super().eventFilter(obj, event)
+
+    def handle_drop_event(self, event):
+        """
+        Gère l'événement de glisser-déposer d'un dossier externe sur un projet ou une zone vide.
+        """
+        if not event.mimeData().hasUrls():
+            return
+
+        urls = event.mimeData().urls()
+        if not urls:
+            return
+
+        url = urls[0]
+        if not url.isLocalFile():
+            return
+
+        dir_path = url.toLocalFile()
+        if not os.path.isdir(dir_path):
+            return
+
+        # Obtenir la position locale du curseur
+        local_pos = self.project_tree.viewport().mapFromGlobal(QCursor.pos())
+        drop_item = self.project_tree.itemAt(local_pos)
+
+        if drop_item:
+            project_id = drop_item.data(0, Qt.ItemDataRole.UserRole)
+            project_name = drop_item.text(0)
+
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT is_organization FROM projects WHERE id = ?", (project_id,))
+                is_organization = cursor.fetchone()[0]
+
+            if is_organization:
+                QMessageBox.warning(self, "Erreur", "Impossible d'importer des FITS dans un projet d'organisation.")
+                return
+
+            # Boîte de dialogue de confirmation
+            confirm = QMessageBox.question(
+                self,
+                "Confirmation d'import",
+                f"Voulez-vous importer les fichiers FITS vers le projet '{project_name}' ?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+
+            if confirm == QMessageBox.StandardButton.Yes:
+                self.import_fits_from_path(dir_path, project_id)
+        else:
+            self.create_project_from_drag(dir_path)
+
+        event.acceptProposedAction()
+
+
+
+
+    def create_project_from_drag(self, dir_path):
+        """
+        Crée un nouveau projet à partir d'un dossier glissé dans une zone vide.
+        """
+        project_name, ok = QInputDialog.getText(
+            self,
+            "Nouveau Projet",
+            "Nom du projet :"
+        )
+
+        if ok and project_name:
+            try:
+                with sqlite3.connect(self.db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                    INSERT INTO projects (name, is_organization) VALUES (?, ?)
+                    """, (project_name, False))
+                    project_id = cursor.lastrowid
+                    conn.commit()
+
+                    # Importer les FITS dans le nouveau projet
+                    self.import_fits_from_path(dir_path, project_id)
+
+                    # Recharger les projets pour afficher le nouveau projet
+                    self.load_projects()
+
+                    # Sélectionner le nouveau projet
+                    self.select_project_by_id(self.project_tree.invisibleRootItem(), project_id)
+            except Exception as e:
+                QMessageBox.critical(self, "Erreur", f"Une erreur est survenue : {e}")
+
+    def dropEvent(self, event):
+        """
+        Gère l'événement de dépôt d'un dossier.
+        """
+        if event.mimeData().hasUrls():
+            self.handle_drop_event(event)
+            event.setDropAction(Qt.DropAction.CopyAction)
+            event.accept()
+        else:
+            event.ignore()
+
+
+    def dragMoveEvent(self, event):
+        """
+        Change l'apparence de l'item survolé pour indiquer qu'il accepte le dépôt.
+        """
+        # Réinitialiser la couleur de fond de tous les items
+        for i in range(self.project_tree.topLevelItemCount()):
+            self.reset_item_background(self.project_tree.topLevelItem(i))
+
+        # Obtenir la position locale du curseur
+        local_pos = self.project_tree.viewport().mapFromGlobal(QCursor.pos())
+        item = self.project_tree.itemAt(local_pos)
+
+        if item:
+            # Vérifier si l'item est un projet image
+            project_id = item.data(0, Qt.ItemDataRole.UserRole)
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT is_organization FROM projects WHERE id = ?", (project_id,))
+                is_organization = cursor.fetchone()[0]
+
+            if not is_organization:
+                item.setBackground(0, QBrush(QColor(200, 230, 255)))  # Couleur de surbrillance
+
+        super().dragMoveEvent(event)
+
+    def reset_item_background(self, item):
+        """
+        Réinitialise la couleur de fond d'un item et de ses enfants.
+        """
+        item.setBackground(0, QBrush())  # Réinitialise la couleur de fond
+        for i in range(item.childCount()):
+            self.reset_item_background(item.child(i))
+
+
+    def dragEnterEvent(self, event):
+        """
+        Accepte les événements de glisser si des URLs sont présentes.
+
+        Args:
+            event (QDragEnterEvent): L'événement de glisser.
+        """
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def open_folder_dialog(self):
+        """
+        Ouvre une boîte de dialogue pour sélectionner un dossier de fichiers FITS.
+        """
+        dir_path = QFileDialog.getExistingDirectory(self, "Sélectionner un répertoire contenant des FITS")
+        if dir_path:
+            selected_items = self.project_tree.selectedItems()
+            if selected_items:
+                project_id = selected_items[0].data(0, Qt.ItemDataRole.UserRole)
+                self.import_fits_from_path(dir_path, project_id)
+
+    def validate_fits_directory(self, dir_path):
+        """
+        Vérifie si un dossier contient des fichiers FITS.
+        """
+        fits_files = []
+        for root, _, files in os.walk(dir_path):
+            for file in files:
+                if file.lower().endswith(('.fits', '.fit')):
+                    fits_files.append(os.path.join(root, file))
+
+        if not fits_files:
+            QMessageBox.warning(self, "Erreur", "Le dossier ne contient pas de fichiers FITS.")
+            return False
+
+        return True
+
+
+    def import_fits_from_path(self, dir_path, project_id):
+        """
+        Importe des fichiers FITS depuis un chemin de dossier donné vers un projet spécifique.
+
+        Args:
+            dir_path (str): Chemin du dossier contenant les fichiers FITS.
+            project_id (int): Identifiant du projet cible.
+        """
+        if not self.validate_fits_directory(dir_path):
+            return
+
+        self.current_project_id = project_id
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+
+            # Vérifier que les colonnes nécessaires existent dans la table images
+            self.ensure_columns_exist(cursor)
+
+            # Parcourir récursivement le répertoire
+            for root, dirs, files in os.walk(dir_path):
+                for file in files:
+                    if file.lower().endswith('.fits'):
+                        file_path = os.path.join(root, file)
+                        filename = os.path.basename(file_path)
+
+                        # Extraire les métadonnées du fichier FITS
+                        metadata = self.extract_fits_metadata(file_path)
+
+                        # Vérifier si le fichier existe déjà dans la base de données
+                        cursor.execute("""
+                        SELECT 1 FROM images WHERE filename = ? AND project_id = ?
+                        """, (filename, project_id))
+                        if cursor.fetchone() is None:
+                            # Construire la requête d'insertion dynamiquement
+                            columns = ["filename", "path", "project_id"]
+                            values = [filename, file_path, project_id]
+
+                            for db_name, value in metadata.items():
+                                columns.append(db_name)
+                                values.append(value)
+
+                            # Entourer les noms de colonnes de guillemets s'ils contiennent des espaces ou caractères spéciaux
+                            columns_quoted = ['"' + col + '"' if ' ' in col or not col.isalnum() else col for col in columns]
+                            placeholders = ', '.join(['?'] * len(values))
+                            columns_str = ', '.join(columns_quoted)
+
+                            query = f"INSERT INTO images ({columns_str}) VALUES ({placeholders})"
+                            cursor.execute(query, values)
+
+                            logging.info(f"Fichier importé : {file_path}")
+            conn.commit()
+            self.load_project_images()
+            QMessageBox.information(self, "Succès", f"Importation terminée. {cursor.rowcount} nouveaux fichiers ajoutés.")
+
     def on_project_selected(self):
         """
-        Active ou désactive le bouton d'importation en fonction de la sélection d'un projet.
-
-        Si un projet est sélectionné, charge les images associées à ce projet.
+        Active ou désactive le bouton d'ouverture de dossier en fonction de la sélection d'un projet.
         """
         selected_items = self.project_tree.selectedItems()
-        self.import_button.setEnabled(len(selected_items) > 0)
+        self.open_folder_button.setEnabled(len(selected_items) > 0)
         if selected_items:
             self.load_project_images()
 
@@ -248,8 +439,6 @@ class MainWindow(QMainWindow):
     def load_last_project(self):
         """
         Charge le dernier projet utilisé.
-
-        Si un projet a été utilisé précédemment, il est sélectionné automatiquement.
         """
         if CONFIG_FILE.exists():
             with open(CONFIG_FILE, 'r') as f:
@@ -283,9 +472,6 @@ class MainWindow(QMainWindow):
     def load_projects(self):
         """
         Charge la liste des projets depuis la base de données sous forme d'arborescence.
-
-        Récupère tous les projets de la base de données et les organise dans une arborescence
-        en fonction de leur parent_id. Les projets d'organisation sont affichés en italique.
         """
         # Sauvegarder l'état déplié des projets
         self.save_expanded_state()
@@ -322,15 +508,12 @@ class MainWindow(QMainWindow):
         # Rétablir l'état déplié des projets
         self.restore_expanded_state()
 
-        # Désactiver le bouton d'importation si aucun projet n'est sélectionné
-        self.import_button.setEnabled(False)
+        # Désactiver le bouton d'ouverture de dossier si aucun projet n'est sélectionné
+        self.open_folder_button.setEnabled(False)
 
     def create_project(self):
         """
         Crée un nouveau projet, éventuellement comme sous-projet d'un projet existant.
-
-        Affiche une boîte de dialogue pour saisir le nom du projet et choisir s'il s'agit
-        d'un projet d'organisation. Demande également si le projet doit être un sous-projet.
         """
         # Sauvegarder l'état déplié des projets
         self.save_expanded_state()
@@ -401,9 +584,6 @@ class MainWindow(QMainWindow):
     def delete_project(self):
         """
         Supprime le projet sélectionné.
-
-        Vérifie si le projet a des sous-projets avant de le supprimer.
-        Affiche une boîte de dialogue de confirmation avant la suppression.
         """
         selected_items = self.project_tree.selectedItems()
         if not selected_items:
@@ -449,9 +629,6 @@ class MainWindow(QMainWindow):
         """
         Vérifie si un projet est un ancêtre d'un autre projet.
 
-        Utilise une requête SQL récursive pour vérifier si potential_parent_id est un
-        sous-projet de project_id, ce qui créerait une boucle dans l'arborescence.
-
         Args:
             project_id (int): Identifiant du projet à vérifier.
             potential_parent_id (int): Identifiant du projet potentiellement parent.
@@ -475,92 +652,9 @@ class MainWindow(QMainWindow):
             """, (project_id, potential_parent_id))
             return cursor.fetchone() is not None
 
-    def tree_drop_event(self, event):
-        """
-        Gère l'événement de glisser-déposer pour mettre à jour la base de données.
-
-        Cette méthode est appelée lorsqu'un projet est déplacé par glisser-déposer.
-        Elle met à jour la base de données pour refléter le nouvel emplacement du projet.
-
-        Args:
-            event (QDropEvent): L'événement de glisser-déposer.
-        """
-        # Sauvegarder l'état déplié des projets
-        self.save_expanded_state()
-
-        # Récupérer l'item déplacé
-        item = self.project_tree.currentItem()
-        if item is None:
-            return
-
-        # Récupérer l'item cible (celui sur lequel on a lâché l'item déplacé)
-        drop_item = self.project_tree.itemAt(event.position().toPoint())
-        if drop_item is None or drop_item == item:
-            return
-
-        project_id = item.data(0, Qt.ItemDataRole.UserRole)
-        new_parent_id = drop_item.data(0, Qt.ItemDataRole.UserRole)
-
-        # Vérifier que le projet n'est pas déplacé dans un de ses sous-projets
-        if self.is_child_of(project_id, new_parent_id):
-            QMessageBox.warning(self, "Erreur", "Un projet ne peut pas être déplacé dans un de ses sous-projets.")
-            self.load_projects()  # Recharger l'arborescence pour annuler le déplacement
-            return
-
-        # Mettre à jour la base de données pour le projet et ses sous-projets
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-
-                # Mettre à jour le parent_id du projet déplacé
-                cursor.execute("UPDATE projects SET parent_id = ? WHERE id = ?", (new_parent_id, project_id))
-
-                # Mettre à jour le parent_id de tous les sous-projets récursivement
-                self.update_children_parent_id(cursor, project_id, new_parent_id)
-
-                conn.commit()
-                self.load_projects()
-
-                # Déplier le projet parent si un projet a été déplacé
-                self.expand_project(new_parent_id)
-
-                # Rétablir l'état déplié des projets
-                self.restore_expanded_state()
-        except Exception as e:
-            logging.error(f"Erreur lors du déplacement du projet: {e}")
-            QMessageBox.critical(self, "Erreur", f"Une erreur est survenue : {e}")
-            self.load_projects()  # Recharger l'arborescence en cas d'erreur
-
-    def update_children_parent_id(self, cursor, old_parent_id, new_parent_id):
-        """
-        Met à jour le parent_id des sous-projets de manière récursive.
-
-        Cette méthode est utilisée pour déplacer tous les sous-projets d'un projet
-        lorsque ce projet est déplacé dans l'arborescence.
-
-        Args:
-            cursor: Le curseur de la base de données pour exécuter les requêtes SQL.
-            old_parent_id (int): L'identifiant du projet parent actuel.
-            new_parent_id (int): L'identifiant du nouveau projet parent.
-        """
-        # Trouver tous les sous-projets directs
-        cursor.execute("SELECT id FROM projects WHERE parent_id = ?", (old_parent_id,))
-        children = cursor.fetchall()
-
-        # Mettre à jour le parent_id des sous-projets directs
-        for child in children:
-            child_id = child[0]  # Accéder au premier élément du tuple (l'identifiant du projet)
-            cursor.execute("UPDATE projects SET parent_id = ? WHERE id = ?", (new_parent_id, child_id))
-
-            # Mettre à jour récursivement les sous-projets des sous-projets
-            self.update_children_parent_id(cursor, child_id, new_parent_id)
-
     def load_project_images(self):
         """
         Charge et affiche la synthèse des prises de vue classées par soirée.
-
-        Si le projet sélectionné est un projet d'organisation, affiche un message
-        indiquant qu'il ne contient pas d'images. Sinon, affiche les images associées.
         """
         selected_items = self.project_tree.selectedItems()
         if selected_items:
@@ -645,78 +739,10 @@ class MainWindow(QMainWindow):
     def open_metadata_config(self):
         """
         Ouvre la fenêtre de configuration des métadonnées.
-
-        Affiche une fenêtre modale pour configurer les mots-clés FITS à extraire.
         """
         config_window = MetadataConfigWindow(self, self.db_path)
         if config_window.exec():
             QMessageBox.information(self, "Succès", "Configuration des métadonnées sauvegardée.")
-
-    def import_fits(self):
-        """
-        Importe des fichiers FITS depuis une arborescence de répertoires.
-
-        Vérifie que le projet sélectionné n'est pas un projet d'organisation.
-        Parcourt récursivement le répertoire sélectionné et importe les fichiers FITS.
-        """
-        if self.current_project_id is None:
-            QMessageBox.warning(self, "Erreur", "Veuillez sélectionner un projet.")
-            return
-
-        # Vérifier si le projet est un projet d'organisation
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT is_organization FROM projects WHERE id = ?", (self.current_project_id,))
-            is_organization = cursor.fetchone()[0]
-
-        if is_organization:
-            QMessageBox.warning(self, "Erreur", "Vous ne pouvez pas importer des images dans un projet d'organisation.")
-            return
-
-        # Ouvrir une boîte de dialogue pour sélectionner un répertoire
-        dir_path = QFileDialog.getExistingDirectory(self, "Sélectionner un répertoire contenant des FITS")
-        if dir_path:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-
-                # Vérifier que les colonnes nécessaires existent dans la table images
-                self.ensure_columns_exist(cursor)
-
-                # Parcourir récursivement le répertoire
-                for root, dirs, files in os.walk(dir_path):
-                    for file in files:
-                        if file.lower().endswith('.fits'):
-                            file_path = os.path.join(root, file)
-                            filename = os.path.basename(file_path)
-
-                            # Extraire les métadonnées du fichier FITS
-                            metadata = self.extract_fits_metadata(file_path)
-
-                            # Vérifier si le fichier existe déjà dans la base de données
-                            cursor.execute("""
-                            SELECT 1 FROM images WHERE filename = ? AND project_id = ?
-                            """, (filename, self.current_project_id))
-                            if cursor.fetchone() is None:
-                                # Construire la requête d'insertion dynamiquement
-                                columns = ["filename", "path", "project_id"]
-                                values = [filename, file_path, self.current_project_id]
-
-                                for db_name, value in metadata.items():
-                                    columns.append(db_name)
-                                    values.append(value)
-
-                                # Entourer les noms de colonnes de guillemets s'ils contiennent des espaces ou caractères spéciaux
-                                columns_quoted = ['"' + col + '"' if ' ' in col or not col.isalnum() else col for col in columns]
-                                placeholders = ', '.join(['?'] * len(values))
-                                columns_str = ', '.join(columns_quoted)
-
-                                query = f"INSERT INTO images ({columns_str}) VALUES ({placeholders})"
-                                cursor.execute(query, values)
-
-                                logging.info(f"Fichier importé : {file_path}")
-            conn.commit()
-            self.load_project_images()
-            QMessageBox.information(self, "Succès", f"Importation terminée. {cursor.rowcount} nouveaux fichiers ajoutés.")
 
     def ensure_columns_exist(self, cursor):
         """
@@ -789,9 +815,6 @@ class MainWindow(QMainWindow):
     def clear_database(self):
         """
         Vide la base de données avec une double validation, en conservant les métadonnées protégées.
-
-        Affiche deux boîtes de dialogue de confirmation avant de vider la base de données.
-        Conserve les métadonnées protégées (date_obs, exposure, ra, dec, filter).
         """
         # Première confirmation
         confirm1 = QMessageBox.question(
