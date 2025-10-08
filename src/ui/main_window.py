@@ -9,7 +9,7 @@ et les interactions avec la base de données pour la gestion des projets et des 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QTreeWidget, QTreeWidgetItem, QListWidget, QListWidgetItem,
-    QLineEdit, QMessageBox, QFileDialog, QInputDialog, QTreeWidgetItemIterator, QDialog, QDialogButtonBox, QCheckBox, QStyle
+    QLineEdit, QMessageBox, QFileDialog, QInputDialog, QTreeWidgetItemIterator, QDialog, QDialogButtonBox, QCheckBox, QStyle, QMenu
 )
 from PyQt6.QtCore import Qt, QEvent
 from PyQt6.QtGui import QIcon, QBrush, QColor, QCursor
@@ -38,18 +38,180 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("After Midnight")
         self.setGeometry(100, 100, 800, 600)
-
         # Configuration du logging
         logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
         # Base de données
         self.db_path = Path("db/aftermidnight.db")
         self.current_project_id = None
-
         # Initialiser l'UI
         self.init_ui()
+        self.setup_context_menu()  # Configurer le menu contextuel
         self.load_projects()
         self.load_last_project()
+
+    def setup_context_menu(self):
+        """
+        Configure le menu contextuel pour les items du QTreeWidget.
+        """
+        self.project_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.project_tree.customContextMenuRequested.connect(self.show_context_menu)
+
+    def eventFilter(self, obj, event):
+        """
+        Filtre les événements pour gérer le clic droit sur le QTreeWidget.
+        """
+        if obj == self.project_tree.viewport():
+            if event.type() == QEvent.Type.ContextMenu:
+                self.show_context_menu(event.pos())
+                return True
+        return super().eventFilter(obj, event)
+
+    def eventFilter(self, obj, event):
+        """
+        Filtre les événements pour gérer le clic droit sur le QTreeWidget.
+        """
+        if obj == self.project_tree.viewport():
+            if event.type() == QEvent.Type.ContextMenu:
+                self.show_context_menu(event.pos())
+                return True
+        return super().eventFilter(obj, event)
+
+    def show_context_menu(self, position):
+        """
+        Affiche le menu contextuel pour les items du QTreeWidget ou une zone vide.
+        """
+        item = self.project_tree.itemAt(position)
+
+        menu = QMenu()
+
+        if item:
+            # Option 1: Nouveau projet (enfant de l'item sélectionné)
+            new_project_action = menu.addAction("Nouveau projet")
+            new_project_action.triggered.connect(lambda: self.create_subproject(item))
+
+            # Ajouter un séparateur
+            menu.addSeparator()
+
+            # Option 2: Renommer le projet
+            rename_project_action = menu.addAction("Renommer le projet")
+            rename_project_action.triggered.connect(lambda: self.rename_project(item))
+
+            # Ajouter un séparateur
+            menu.addSeparator()
+
+            # Option 3: Déplacer le projet
+            move_project_action = menu.addAction("Déplacer le projet")
+            move_project_action.triggered.connect(lambda: self.move_project(item))
+
+            # Ajouter un séparateur
+            menu.addSeparator()
+
+            # Option 4: Supprimer le projet
+            delete_project_action = menu.addAction("Supprimer le projet")
+            delete_project_action.triggered.connect(lambda: self.delete_project(item))
+        else:
+            # Option: Ajouter un projet
+            add_project_action = menu.addAction("Ajouter un projet")
+            add_project_action.triggered.connect(lambda: self.create_project())
+
+        menu.exec(self.project_tree.viewport().mapToGlobal(position))
+
+    def create_subproject(self, parent_item):
+        """
+        Crée un nouveau sous-projet de l'item sélectionné.
+        """
+        project_name, ok = QInputDialog.getText(
+            self,
+            "Nouveau Sous-Projet",
+            "Nom du sous-projet :"
+        )
+
+        if ok and project_name:
+            try:
+                parent_id = parent_item.data(0, Qt.ItemDataRole.UserRole)
+                with sqlite3.connect(self.db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                    INSERT INTO projects (name, parent_id, is_organization) VALUES (?, ?, ?)
+                    """, (project_name, parent_id, False))
+                    conn.commit()
+                    self.load_projects()
+                    self.expand_project(parent_id)
+            except Exception as e:
+                QMessageBox.critical(self, "Erreur", f"Une erreur est survenue : {e}")
+
+    def rename_project(self, item):
+        """
+        Renomme le projet sélectionné.
+        """
+        project_id = item.data(0, Qt.ItemDataRole.UserRole)
+        new_name, ok = QInputDialog.getText(
+            self,
+            "Renommer le Projet",
+            "Nouveau nom du projet :",
+            text=item.text(0)
+        )
+
+        if ok and new_name:
+            try:
+                with sqlite3.connect(self.db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                    UPDATE projects SET name = ? WHERE id = ?
+                    """, (new_name, project_id))
+                    conn.commit()
+                    self.load_projects()
+            except Exception as e:
+                QMessageBox.critical(self, "Erreur", f"Une erreur est survenue : {e}")
+
+    def move_project(self, item):
+        """
+        Déplace le projet sélectionné vers un autre projet cible.
+        """
+        source_project_id = item.data(0, Qt.ItemDataRole.UserRole)
+        QMessageBox.information(self, "Déplacer le Projet", "Cliquez sur le projet cible pour déplacer.")
+
+        # Désactiver temporairement le menu contextuel pour éviter les conflits
+        self.project_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+
+        # Stocker l'ID du projet source
+        self.source_project_id = source_project_id
+
+        # Connecter le clic de la souris pour sélectionner le projet cible
+        self.project_tree.itemClicked.connect(self.handle_move_project)
+
+    def handle_move_project(self, target_item):
+        """
+        Gère le déplacement du projet source vers le projet cible.
+        """
+        target_project_id = target_item.data(0, Qt.ItemDataRole.UserRole)
+
+        # Vérifier que le projet cible n'est pas un descendant du projet source
+        if self.is_child_of(self.source_project_id, target_project_id):
+            QMessageBox.warning(self, "Erreur", "Impossible de déplacer un projet dans l'un de ses sous-projets.")
+            self.reset_move_project()
+            return
+
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                UPDATE projects SET parent_id = ? WHERE id = ?
+                """, (target_project_id, self.source_project_id))
+                conn.commit()
+                self.load_projects()
+        except Exception as e:
+            QMessageBox.critical(self, "Erreur", f"Une erreur est survenue : {e}")
+
+        self.reset_move_project()
+
+    def reset_move_project(self):
+        """
+        Réinitialise l'état après un déplacement de projet.
+        """
+        self.project_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.project_tree.itemClicked.disconnect(self.handle_move_project)
+        del self.source_project_id
 
     def format_duration(self, seconds):
         """
@@ -131,11 +293,11 @@ class MainWindow(QMainWindow):
         self.project_tree.setAcceptDrops(True)
         self.project_tree.installEventFilter(self)
 
-        self.new_project_button = QPushButton("Nouveau Projet")
-        self.new_project_button.clicked.connect(self.create_project)
-
-        self.delete_project_button = QPushButton("Supprimer le Projet")
-        self.delete_project_button.clicked.connect(self.delete_project)
+        # Supprimer les boutons "Nouveau projet" et "Supprimer"
+        # self.new_project_button = QPushButton("Nouveau Projet")
+        # self.new_project_button.clicked.connect(self.create_project)
+        # self.delete_project_button = QPushButton("Supprimer le Projet")
+        # self.delete_project_button.clicked.connect(self.delete_project)
 
         self.config_button = QPushButton("Configurer les Métadonnées")
         self.config_button.clicked.connect(self.open_metadata_config)
@@ -145,8 +307,8 @@ class MainWindow(QMainWindow):
 
         project_layout.addWidget(self.project_label)
         project_layout.addWidget(self.project_tree)
-        project_layout.addWidget(self.new_project_button)
-        project_layout.addWidget(self.delete_project_button)
+        #project_layout.addWidget(self.new_project_button)
+        #project_layout.addWidget(self.delete_project_button)
         project_layout.addWidget(self.config_button)
         project_layout.addWidget(self.clear_db_button)
         self.project_panel.setLayout(project_layout)
@@ -244,9 +406,6 @@ class MainWindow(QMainWindow):
 
         event.acceptProposedAction()
 
-
-
-
     def create_project_from_drag(self, dir_path):
         """
         Crée un nouveau projet à partir d'un dossier glissé dans une zone vide.
@@ -289,7 +448,6 @@ class MainWindow(QMainWindow):
         else:
             event.ignore()
 
-
     def dragMoveEvent(self, event):
         """
         Change l'apparence de l'item survolé pour indiquer qu'il accepte le dépôt.
@@ -322,7 +480,6 @@ class MainWindow(QMainWindow):
         item.setBackground(0, QBrush())  # Réinitialise la couleur de fond
         for i in range(item.childCount()):
             self.reset_item_background(item.child(i))
-
 
     def dragEnterEvent(self, event):
         """
@@ -360,7 +517,6 @@ class MainWindow(QMainWindow):
             return False
 
         return True
-
 
     def import_fits_from_path(self, dir_path, project_id):
         """
@@ -581,28 +737,45 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Erreur", f"Une erreur est survenue : {e}")
 
-    def delete_project(self):
+    def delete_project(self, item=None, *args):
         """
         Supprime le projet sélectionné.
         """
-        selected_items = self.project_tree.selectedItems()
-        if not selected_items:
-            QMessageBox.warning(self, "Erreur", "Veuillez sélectionner un projet à supprimer.")
-            return
+        if item is None:
+            selected_items = self.project_tree.selectedItems()
+            if not selected_items:
+                QMessageBox.warning(self, "Erreur", "Veuillez sélectionner un projet à supprimer.")
+                return
+            item = selected_items[0]
 
-        selected_item = selected_items[0]
-        project_id = selected_item.data(0, Qt.ItemDataRole.UserRole)
-        project_name = selected_item.text(0)
+        project_id = item.data(0, Qt.ItemDataRole.UserRole)
+        project_name = item.text(0)
 
-        # Vérifier si le projet a des sous-projets
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM projects WHERE parent_id = ?", (project_id,))
+
+            # Vérifier si le projet a des sous-projets
+            cursor.execute("""
+            WITH RECURSIVE project_tree AS (
+                SELECT id FROM projects WHERE parent_id = ?
+                UNION ALL
+                SELECT p.id FROM projects p
+                INNER JOIN project_tree pt ON p.parent_id = pt.id
+            )
+            SELECT COUNT(*) FROM project_tree
+            """, (project_id,))
+
             has_children = cursor.fetchone()[0] > 0
 
         if has_children:
-            QMessageBox.warning(self, "Erreur", f"Le projet '{project_name}' contient des sous-projets et ne peut pas être supprimé.")
-            return
+            confirm = QMessageBox.question(
+                self,
+                "Supprimer l'Arborescence",
+                f"Le projet '{project_name}' contient des sous-projets. Voulez-vous vraiment supprimer toute l'arborescence ?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if confirm != QMessageBox.StandardButton.Yes:
+                return
 
         confirm = QMessageBox.question(
             self,
@@ -615,41 +788,59 @@ class MainWindow(QMainWindow):
             try:
                 with sqlite3.connect(self.db_path) as conn:
                     cursor = conn.cursor()
-                    # Supprimer les images associées au projet
-                    cursor.execute("DELETE FROM images WHERE project_id = ?", (project_id,))
-                    # Supprimer le projet
-                    cursor.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+
+                    # Supprimer les images associées au projet et à ses sous-projets
+                    cursor.execute("""
+                    WITH RECURSIVE project_tree AS (
+                        SELECT id FROM projects WHERE id = ?
+                        UNION ALL
+                        SELECT p.id FROM projects p
+                        INNER JOIN project_tree pt ON p.parent_id = pt.id
+                    )
+                    DELETE FROM images WHERE project_id IN (SELECT id FROM project_tree)
+                    """, (project_id,))
+
+                    # Supprimer le projet et ses sous-projets
+                    cursor.execute("""
+                    WITH RECURSIVE project_tree AS (
+                        SELECT id FROM projects WHERE id = ?
+                        UNION ALL
+                        SELECT p.id FROM projects p
+                        INNER JOIN project_tree pt ON p.parent_id = pt.id
+                    )
+                    DELETE FROM projects WHERE id IN (SELECT id FROM project_tree)
+                    """, (project_id,))
+
                     conn.commit()
                     self.load_projects()
                     self.session_list.clear()
             except Exception as e:
                 QMessageBox.critical(self, "Erreur", f"Une erreur est survenue : {e}")
 
-    def is_child_of(self, project_id, potential_parent_id):
+    def is_child_of(self, parent_id, child_id):
         """
-        Vérifie si un projet est un ancêtre d'un autre projet.
-
+        Vérifie si le projet enfant est un descendant du projet parent.
         Args:
-            project_id (int): Identifiant du projet à vérifier.
-            potential_parent_id (int): Identifiant du projet potentiellement parent.
-
+            parent_id (int): Identifiant du projet parent.
+            child_id (int): Identifiant du projet enfant.
         Returns:
-            bool: True si potential_parent_id est un sous-projet de project_id, False sinon.
+            bool: True si le projet enfant est un descendant du projet parent, False sinon.
         """
-        if potential_parent_id is None:
-            return False
+        if parent_id == child_id:
+            return True
 
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("""
             WITH RECURSIVE project_tree AS (
-                SELECT id, parent_id FROM projects WHERE id = ?
+                SELECT id FROM projects WHERE id = ?
                 UNION ALL
-                SELECT p.id, p.parent_id FROM projects p
-                INNER JOIN project_tree pt ON p.id = pt.parent_id
+                SELECT p.id FROM projects p
+                INNER JOIN project_tree pt ON p.parent_id = pt.id
             )
-            SELECT id FROM project_tree WHERE id = ?
-            """, (project_id, potential_parent_id))
+            SELECT 1 FROM project_tree WHERE id = ?
+            """, (parent_id, child_id))
+
             return cursor.fetchone() is not None
 
     def load_project_images(self):
