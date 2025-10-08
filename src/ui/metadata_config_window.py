@@ -16,7 +16,7 @@ class MetadataConfigWindow(QDialog):
 
         self.db_path = db_path
         self.fits_keywords = []
-        self.protected_keywords = {"date_obs", "exposure", "ra", "dec", "filter"}
+        self.protected_keywords = {"date_obs", "exposure", "ra", "dec", "filter", "imagetyp"}
         self.init_ui()
 
     def init_ui(self):

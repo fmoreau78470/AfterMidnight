@@ -931,7 +931,7 @@ class MainWindow(QMainWindow):
         """
         Ouvre la fenêtre de configuration des métadonnées.
         """
-        config_window = MetadataConfigWindow(self, self.db_path)
+        config_window = MetadataConfigWindow(self, db_path=self.db_path)
         if config_window.exec():
             QMessageBox.information(self, "Succès", "Configuration des métadonnées sauvegardée.")
 
