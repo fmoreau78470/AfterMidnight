@@ -480,8 +480,6 @@ class MainWindow(QMainWindow):
             child.setExpanded(True)
             self.expand_children(child)
 
- 
-
     def eventFilter(self, obj, event):
         """
         Filtre les événements pour gérer le glisser-déposer de dossiers externes.
@@ -700,7 +698,6 @@ class MainWindow(QMainWindow):
     def import_fits_from_path(self, dir_path, project_id):
         """
         Importe des fichiers FITS depuis un chemin de dossier donné vers un projet spécifique.
-
         Args:
             dir_path (str): Chemin du dossier contenant les fichiers FITS.
             project_id (int): Identifiant du projet cible.
@@ -709,11 +706,14 @@ class MainWindow(QMainWindow):
             return
 
         self.current_project_id = project_id
+        valid_imagetyp = {'LIGHT', 'FLAT', 'DARK', 'BIAS'}
+
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-
             # Vérifier que les colonnes nécessaires existent dans la table images
             self.ensure_columns_exist(cursor)
+
+            imported_count = 0
 
             # Parcourir récursivement le répertoire
             for root, dirs, files in os.walk(dir_path):
@@ -725,6 +725,12 @@ class MainWindow(QMainWindow):
                         # Extraire les métadonnées du fichier FITS
                         metadata = self.extract_fits_metadata(file_path)
 
+                        # Vérifier si IMAGETYP est valide
+                        imagetyp = metadata.get('IMAGETYP', '').upper()
+                        if imagetyp not in valid_imagetyp:
+                            logging.warning(f"Fichier ignoré {file_path}: IMAGETYP '{imagetyp}' non valide.")
+                            continue
+
                         # Vérifier si le fichier existe déjà dans la base de données
                         cursor.execute("""
                         SELECT 1 FROM images WHERE filename = ? AND project_id = ?
@@ -733,7 +739,6 @@ class MainWindow(QMainWindow):
                             # Construire la requête d'insertion dynamiquement
                             columns = ["filename", "path", "project_id"]
                             values = [filename, file_path, project_id]
-
                             for db_name, value in metadata.items():
                                 columns.append(db_name)
                                 values.append(value)
@@ -742,14 +747,14 @@ class MainWindow(QMainWindow):
                             columns_quoted = ['"' + col + '"' if ' ' in col or not col.isalnum() else col for col in columns]
                             placeholders = ', '.join(['?'] * len(values))
                             columns_str = ', '.join(columns_quoted)
-
                             query = f"INSERT INTO images ({columns_str}) VALUES ({placeholders})"
                             cursor.execute(query, values)
-
                             logging.info(f"Fichier importé : {file_path}")
+                            imported_count += 1
+
             conn.commit()
             self.load_project_images()
-            QMessageBox.information(self, "Succès", f"Importation terminée. {cursor.rowcount} nouveaux fichiers ajoutés.")
+            QMessageBox.information(self, "Succès", f"Importation terminée. {imported_count} nouveaux fichiers ajoutés.")
 
     def on_project_selected(self):
         """
