@@ -726,7 +726,7 @@ class MainWindow(QMainWindow):
                         metadata = self.extract_fits_metadata(file_path)
 
                         # Vérifier si IMAGETYP est valide
-                        imagetyp = metadata.get('IMAGETYP', '').upper()
+                        imagetyp = metadata.get('imagetyp', '').upper()
                         if imagetyp not in valid_imagetyp:
                             logging.warning(f"Fichier ignoré {file_path}: IMAGETYP '{imagetyp}' non valide.")
                             continue

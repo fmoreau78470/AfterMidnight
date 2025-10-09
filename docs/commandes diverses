@@ -18,5 +18,15 @@ git restore .                           # remplace tous les fichiers modifiés p
 git checkout a1b2c3d -- .               # restaure les fichiers de ce commit 
 
 
+git branch nom_branche                  # Créer une nouvelle branche
+git checkout -b nom_branche             # Créer et basculer dessus
+git branch                              # Lister les branches locales
+git branch -a                           # Montre les branches sur ta machine
+git checkout nom_branche                # Basculer vers une autre branche
+git status ou git branch                # Voir sur quelle branche on est. Le * indique la branche active
+
+git branch -d nom_branche               # Supprimer une branche locale (fusionnée)
+git branch -D nom_branche               # Supprimer une branche locale (forcé)
+
 source venv/bin/activate
 python3.12 -m src.main
