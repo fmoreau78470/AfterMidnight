@@ -13,5 +13,10 @@ git checkout nom-de-la-branche          # passer sur cette branche
 git status                              # vérifier su quelle branche on est
 git push -u origin nom-de-la-branche#   # publier ta nouvelle branche
 
+git log --oneline                       # liste les commits
+git restore .                           # remplace tous les fichiers modifiés par leur version du dernier commit
+git checkout a1b2c3d -- .               # restaure les fichiers de ce commit 
+
+
 source venv/bin/activate
 python3.12 -m src.main

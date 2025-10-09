@@ -1210,7 +1210,6 @@ class MainWindow(QMainWindow):
             "Êtes-vous sûr de vouloir vider toute la base de données ? Cette action est irréversible.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
-
         if confirm1 == QMessageBox.StandardButton.Yes:
             # Deuxième confirmation
             confirm2 = QMessageBox.question(
@@ -1219,15 +1218,16 @@ class MainWindow(QMainWindow):
                 "Cette action supprimera tous les projets et toutes les images. Voulez-vous vraiment continuer ?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
-
             if confirm2 == QMessageBox.StandardButton.Yes:
                 try:
                     with sqlite3.connect(self.db_path) as conn:
                         cursor = conn.cursor()
-
                         # Sauvegarder les métadonnées protégées
                         protected_metadata = []
-                        for fits_keyword, db_name in [("DATE-LOC", "date_obs"), ("EXPOSURE", "exposure"), ("RA", "ra"), ("DEC", "dec"), ("FILTER", "filter")]:
+                        # Ajouter IMAGETYP à la liste des métadonnées protégées
+                        protected_keywords = [("DATE-LOC", "date_obs"), ("EXPOSURE", "exposure"), ("RA", "ra"), ("DEC", "dec"), ("FILTER", "filter"), ("IMAGETYP", "imagetyp")]
+
+                        for fits_keyword, db_name in protected_keywords:
                             cursor.execute("SELECT 1 FROM metadata_config WHERE fits_keyword = ? AND db_name = ?", (fits_keyword, db_name))
                             if cursor.fetchone() is None:
                                 protected_metadata.append((fits_keyword, db_name))
@@ -1237,12 +1237,10 @@ class MainWindow(QMainWindow):
                         # Supprimer tous les projets
                         cursor.execute("DELETE FROM projects")
                         # Supprimer toutes les métadonnées sauf celles protégées
-                        cursor.execute("DELETE FROM metadata_config WHERE db_name NOT IN ('date_obs', 'exposure', 'ra', 'dec', 'filter')")
-
+                        cursor.execute("DELETE FROM metadata_config WHERE db_name NOT IN ('date_obs', 'exposure', 'ra', 'dec', 'filter', 'imagetyp')")
                         # Réinsérer les métadonnées protégées si elles ont été supprimées
                         for fits_keyword, db_name in protected_metadata:
                             cursor.execute("INSERT INTO metadata_config (fits_keyword, db_name) VALUES (?, ?)", (fits_keyword, db_name))
-
                         conn.commit()
                     self.load_projects()
                     self.session_list.clear()

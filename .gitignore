@@ -4,6 +4,9 @@ venv/
 # Base de données locale
 db/
 
+# documentation
+docs/
+
 # Fichiers de configuration locaux
 .config/
 .aftermidnight/
