@@ -82,63 +82,131 @@ class MainWindow(QMainWindow):
         """
         item = self.project_tree.itemAt(position)
 
-        menu = QMenu()
-
-        if item:
-            # Option 1: Nouveau projet (enfant de l'item sélectionné)
-            new_project_action = menu.addAction("Nouveau projet")
-            new_project_action.triggered.connect(lambda: self.create_subproject(item))
-
-            # Ajouter un séparateur
-            menu.addSeparator()
-
-            # Option 2: Renommer le projet
-            rename_project_action = menu.addAction("Renommer le projet")
-            rename_project_action.triggered.connect(lambda: self.rename_project(item))
-
-            # Ajouter un séparateur
-            menu.addSeparator()
-
-            # Option 3: Déplacer le projet
-            move_project_action = menu.addAction("Déplacer le projet")
-            move_project_action.triggered.connect(lambda: self.move_project(item))
-
-            # Ajouter un séparateur
-            menu.addSeparator()
-
-            # Option 4: Supprimer le projet
-            delete_project_action = menu.addAction("Supprimer le projet")
-            delete_project_action.triggered.connect(lambda: self.delete_project(item))
-        else:
-            # Option: Ajouter un projet
+        if not item:
+            menu = QMenu()
             add_project_action = menu.addAction("Ajouter un projet")
             add_project_action.triggered.connect(lambda: self.create_project())
+            menu.exec(self.project_tree.viewport().mapToGlobal(position))
+            return
+
+        menu = QMenu()
+        project_id = item.data(0, Qt.ItemDataRole.UserRole)
+
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT is_organization FROM projects WHERE id = ?", (project_id,))
+            is_organization = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM images WHERE project_id = ?", (project_id,))
+            image_count = cursor.fetchone()[0]
+
+
+        # Option 1: Nouveau projet (enfant de l'item sélectionné)
+        new_project_action = menu.addAction("Nouveau projet")
+        new_project_action.triggered.connect(lambda: self.create_subproject(item))
+
+        # Ajouter un séparateur
+        menu.addSeparator()
+
+        if not is_organization and image_count == 0:
+            convert_to_org_action = menu.addAction("Modifier en projet d'organisation")
+            convert_to_org_action.triggered.connect(lambda: self.convert_to_organization_project(item))
+
+            menu.addSeparator()
+
+
+        # Option 2: Renommer le projet
+        rename_project_action = menu.addAction("Renommer le projet")
+        rename_project_action.triggered.connect(lambda: self.rename_project(item))
+
+        # Ajouter un séparateur
+        menu.addSeparator()
+
+        # Option 3: Déplacer le projet
+        move_project_action = menu.addAction("Déplacer le projet")
+        move_project_action.triggered.connect(lambda: self.move_project(item))
+
+        # Ajouter un séparateur
+        menu.addSeparator()
+
+        # Option 4: Supprimer le projet
+        delete_project_action = menu.addAction("Supprimer le projet")
+        delete_project_action.triggered.connect(lambda: self.delete_project(item))
 
         menu.exec(self.project_tree.viewport().mapToGlobal(position))
+
+    def convert_to_organization_project(self, item):
+        """
+        Convertit un projet d'image en projet d'organisation.
+        """
+        project_id = item.data(0, Qt.ItemDataRole.UserRole)
+        project_name = item.text(0)
+
+        confirm = QMessageBox.question(
+            self,
+            "Conversion en Projet d'Organisation",
+            f"Voulez-vous vraiment convertir le projet '{project_name}' en projet d'organisation ?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+
+        if confirm == QMessageBox.StandardButton.Yes:
+            try:
+                with sqlite3.connect(self.db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                    UPDATE projects SET is_organization = 1 WHERE id = ?
+                    """, (project_id,))
+                    conn.commit()
+                    self.load_projects()
+            except Exception as e:
+                QMessageBox.critical(self, "Erreur", f"Une erreur est survenue : {e}")
 
     def create_subproject(self, parent_item):
         """
         Crée un nouveau sous-projet de l'item sélectionné.
         """
-        project_name, ok = QInputDialog.getText(
-            self,
-            "Nouveau Sous-Projet",
-            "Nom du sous-projet :"
-        )
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Nouveau Sous-Projet")
+        dialog_layout = QVBoxLayout()
 
-        if ok and project_name:
-            try:
-                parent_id = parent_item.data(0, Qt.ItemDataRole.UserRole)
-                with sqlite3.connect(self.db_path) as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                    INSERT INTO projects (name, parent_id, is_organization) VALUES (?, ?, ?)
-                    """, (project_name, parent_id, False))
-                    conn.commit()
-                    self.load_projects()
-                    self.expand_project(parent_id)
-            except Exception as e:
-                QMessageBox.critical(self, "Erreur", f"Une erreur est survenue : {e}")
+        name_label = QLabel("Nom du sous-projet :")
+        name_edit = QLineEdit()
+        dialog_layout.addWidget(name_label)
+        dialog_layout.addWidget(name_edit)
+
+        org_check = QCheckBox("Projet d'organisation")
+        dialog_layout.addWidget(org_check)
+
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        dialog_layout.addWidget(button_box)
+
+        dialog.setLayout(dialog_layout)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        project_name = name_edit.text()
+        if not project_name:
+            return
+
+        is_organization = org_check.isChecked()
+        parent_id = parent_item.data(0, Qt.ItemDataRole.UserRole)
+
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                INSERT INTO projects (name, parent_id, is_organization) VALUES (?, ?, ?)
+                """, (project_name, parent_id, is_organization))
+                conn.commit()
+                self.load_projects()
+                self.expand_project(parent_id)
+        except sqlite3.IntegrityError:
+            QMessageBox.warning(self, "Erreur", "Un projet avec ce nom existe déjà.")
+        except Exception as e:
+            QMessageBox.critical(self, "Erreur", f"Une erreur est survenue : {e}")
 
     def rename_project(self, item):
         """
@@ -284,39 +352,53 @@ class MainWindow(QMainWindow):
         self.project_panel = QWidget()
         project_layout = QVBoxLayout()
 
+        # Widget pour le label et le bouton
+        label_button_widget = QWidget()
+        label_button_layout = QHBoxLayout()
+
+        # Bouton pour plier/déplier tous les projets
+        self.toggle_expand_button = QPushButton()
+        self.toggle_expand_button.setFixedSize(24, 24)  # Taille réduite pour le bouton
+        self.toggle_expand_button.setIcon(QIcon.fromTheme("go-down"))  # Icône initiale pour déplier
+        self.toggle_expand_button.setToolTip("Tout plier/déplier")
+        self.toggle_expand_button.clicked.connect(self.toggle_all_projects)
+
+        # Label "Projets :"
         self.project_label = QLabel("Projets :")
+
+        # Ajouter le bouton et le label au layout horizontal
+        label_button_layout.addWidget(self.toggle_expand_button)
+        label_button_layout.addWidget(self.project_label)
+        label_button_layout.addStretch()  # Ajouter un espace flexible pour aligner à gauche
+
+        label_button_widget.setLayout(label_button_layout)
+
+        # Ajouter le widget contenant le label et le bouton au layout principal des projets
+        project_layout.addWidget(label_button_widget)
+
+        # Arborescence des projets
         self.project_tree = QTreeWidget()
         self.project_tree.setHeaderLabel("Arborescence des Projets")
-        self.project_tree.itemSelectionChanged.connect(self.on_project_selected)
-
-        # Activer le support du glisser-déposer pour les dossiers externes
         self.project_tree.setAcceptDrops(True)
+        self.project_tree.itemSelectionChanged.connect(self.on_project_selected)
         self.project_tree.installEventFilter(self)
 
-        # Supprimer les boutons "Nouveau projet" et "Supprimer"
-        # self.new_project_button = QPushButton("Nouveau Projet")
-        # self.new_project_button.clicked.connect(self.create_project)
-        # self.delete_project_button = QPushButton("Supprimer le Projet")
-        # self.delete_project_button.clicked.connect(self.delete_project)
+        project_layout.addWidget(self.project_tree)
 
+        # Boutons de configuration et de vidage de la base de données
         self.config_button = QPushButton("Configurer les Métadonnées")
         self.config_button.clicked.connect(self.open_metadata_config)
-
         self.clear_db_button = QPushButton("Vider la Base de Données")
         self.clear_db_button.clicked.connect(self.clear_database)
 
-        project_layout.addWidget(self.project_label)
-        project_layout.addWidget(self.project_tree)
-        #project_layout.addWidget(self.new_project_button)
-        #project_layout.addWidget(self.delete_project_button)
         project_layout.addWidget(self.config_button)
         project_layout.addWidget(self.clear_db_button)
+
         self.project_panel.setLayout(project_layout)
 
         # Panneau des sessions (centre)
         self.session_panel = QWidget()
         session_layout = QVBoxLayout()
-
         self.session_label = QLabel("Synthèse des prises de vue :")
         self.session_list = QListWidget()
 
@@ -330,13 +412,75 @@ class MainWindow(QMainWindow):
         session_layout.addWidget(self.session_label)
         session_layout.addWidget(self.session_list)
         session_layout.addWidget(self.open_folder_button)
+
         self.session_panel.setLayout(session_layout)
 
         # Ajouter les panneaux au layout principal
         main_layout.addWidget(self.project_panel, stretch=1)
         main_layout.addWidget(self.session_panel, stretch=3)
+
         main_widget.setLayout(main_layout)
         self.setCentralWidget(main_widget)
+
+    def collapse_all_projects(self):
+        """
+        Plie tous les projets dans l'arborescence.
+        """
+        for i in range(self.project_tree.topLevelItemCount()):
+            item = self.project_tree.topLevelItem(i)
+            item.setExpanded(False)
+            self.collapse_children(item)
+
+    def toggle_all_projects(self):
+        """
+        Bascule entre plier et déplier tous les projets dans l'arborescence.
+        """
+        all_collapsed = all(not self.project_tree.topLevelItem(i).isExpanded() for i in range(self.project_tree.topLevelItemCount()))
+
+        if all_collapsed:
+            self.expand_all_projects()
+            self.toggle_expand_button.setIcon(QIcon.fromTheme("go-down"))
+        else:
+            self.collapse_all_projects()
+            self.toggle_expand_button.setIcon(QIcon.fromTheme("go-up"))
+
+    def collapse_all_projects(self):
+        """
+        Plie tous les projets dans l'arborescence.
+        """
+        for i in range(self.project_tree.topLevelItemCount()):
+            item = self.project_tree.topLevelItem(i)
+            item.setExpanded(False)
+            self.collapse_children(item)
+
+    def expand_all_projects(self):
+        """
+        Déplie tous les projets dans l'arborescence.
+        """
+        for i in range(self.project_tree.topLevelItemCount()):
+            item = self.project_tree.topLevelItem(i)
+            item.setExpanded(True)
+            self.expand_children(item)
+
+    def collapse_children(self, item):
+        """
+        Plie récursivement tous les enfants d'un item.
+        """
+        for i in range(item.childCount()):
+            child = item.child(i)
+            child.setExpanded(False)
+            self.collapse_children(child)
+
+    def expand_children(self, item):
+        """
+        Déplie récursivement tous les enfants d'un item.
+        """
+        for i in range(item.childCount()):
+            child = item.child(i)
+            child.setExpanded(True)
+            self.expand_children(child)
+
+ 
 
     def eventFilter(self, obj, event):
         """
@@ -388,20 +532,55 @@ class MainWindow(QMainWindow):
                 is_organization = cursor.fetchone()[0]
 
             if is_organization:
-                QMessageBox.warning(self, "Erreur", "Impossible d'importer des FITS dans un projet d'organisation.")
-                return
+                # Demander à l'utilisateur s'il veut créer un nouveau projet
+                confirm = QMessageBox.question(
+                    self,
+                    "Créer un Nouveau Projet",
+                    f"La cible est un projet d'organisation. Voulez-vous créer un nouveau projet et importer les FITS ?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
 
-            # Boîte de dialogue de confirmation
-            confirm = QMessageBox.question(
-                self,
-                "Confirmation d'import",
-                f"Voulez-vous importer les fichiers FITS vers le projet '{project_name}' ?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-            )
+                if confirm == QMessageBox.StandardButton.Yes:
+                    # Demander le nom du nouveau projet
+                    project_name, ok = QInputDialog.getText(
+                        self,
+                        "Nouveau Projet",
+                        "Nom du nouveau projet :"
+                    )
 
-            if confirm == QMessageBox.StandardButton.Yes:
-                self.import_fits_from_path(dir_path, project_id)
+                    if ok and project_name:
+                        try:
+                            with sqlite3.connect(self.db_path) as conn:
+                                cursor = conn.cursor()
+                                cursor.execute("""
+                                INSERT INTO projects (name, parent_id, is_organization) VALUES (?, ?, ?)
+                                """, (project_name, project_id, False))
+                                new_project_id = cursor.lastrowid
+                                conn.commit()
+
+                                # Importer les FITS dans le nouveau projet
+                                self.import_fits_from_path(dir_path, new_project_id)
+
+                                # Recharger les projets pour afficher le nouveau projet
+                                self.load_projects()
+
+                                # Sélectionner le nouveau projet
+                                self.select_project_by_id(self.project_tree.invisibleRootItem(), new_project_id)
+                        except Exception as e:
+                            QMessageBox.critical(self, "Erreur", f"Une erreur est survenue : {e}")
+            else:
+                # Importer les FITS dans le projet existant
+                confirm = QMessageBox.question(
+                    self,
+                    "Confirmation d'import",
+                    f"Voulez-vous importer les fichiers FITS vers le projet '{project_name}' ?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+
+                if confirm == QMessageBox.StandardButton.Yes:
+                    self.import_fits_from_path(dir_path, project_id)
         else:
+            # Créer un nouveau projet dans une zone vide
             self.create_project_from_drag(dir_path)
 
         event.acceptProposedAction()
@@ -578,8 +757,20 @@ class MainWindow(QMainWindow):
         """
         selected_items = self.project_tree.selectedItems()
         self.open_folder_button.setEnabled(len(selected_items) > 0)
+
         if selected_items:
-            self.load_project_images()
+            selected_item = selected_items[0]
+            project_id = selected_item.data(0, Qt.ItemDataRole.UserRole)
+
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT is_organization FROM projects WHERE id = ?", (project_id,))
+                is_organization = cursor.fetchone()[0]
+
+            if is_organization:
+                self.open_folder_button.setEnabled(False)
+            else:
+                self.load_project_images()
 
     def save_last_project(self, project_id):
         """
